@@ -147,15 +147,7 @@ class MajsoulConnection {
         shuffle(this._servers);
         const server = this._servers[0];
         console.log("Connecting to " + server);
-        let agent = undefined;
-        if (process.env.http_proxy) {
-            console.log(`Using proxy ${process.env.http_proxy}`);
-            const url = require("url");
-            const HttpsProxyAgent = require("https-proxy-agent");
-            agent = new HttpsProxyAgent(url.parse(process.env.http_proxy));
-        }
         this._socket = new WebSocket(server, {
-            agent,
             headers: HEADERS,
             insecureHTTPParser: true,
         });
@@ -281,28 +273,30 @@ async function getRes(path, bustCache) {
     const cacheDir = p.join(__dirname, ".cache");
     const cacheFile = p.join(cacheDir, cacheHash);
 
-    const result = await api({
+    return await api({
         method: 'GET',
         url: url,
+        timeout:3000,
         responseType: 'json',
-        timeout: 2500,
         jar: cookiejar,
         headers: HEADERS,
         withCredentials: true
+    }).then((r)=>{
+        if (r.data === undefined) {
+            throw new Error("Failed to get resource " + path);
+        }
+        fs.mkdirSync(cacheDir, {recursive: true});
+        fs.writeFileSync(p.join(cacheDir, cacheHash), JSON.stringify(r.data));
+        return r.data;
     }).catch((e) => {
         try {
             console.log(`Using cache for ${path} (${cacheHash})`);
             return JSON.parse(fs.readFileSync(cacheFile, {encoding: "utf8"}));
         } catch (e) {
+            console.log(e);
         }
         return Promise.reject(e);
     });
-    if (result.data === undefined) {
-        throw new Error("Failed to get resource " + path);
-    }
-    fs.mkdirSync(cacheDir, {recursive: true});
-    fs.writeFileSync(p.join(cacheDir, cacheHash), JSON.stringify(result.data));
-    return result.data;
 }
 
 async function fetchLatestDataDefinition() {
@@ -318,8 +312,8 @@ async function fetchLatestDataDefinition() {
 
 async function createMajsoulConnection(env) {
     let {accessToken, preferredServer, OAUTH_TYPE} = env;
-    let serverListUrl = process.env.SERVER_LIST_URL;
-    const wsScheme = process.env.WS_SCHEME || "wss";
+    let serverListUrl = undefined;
+    const wsScheme = "wss";
     const versionInfo = await getRes("version.json", true);
     const resInfo = await getRes(`resversion${versionInfo.version}.json`);
     const pbVersion = resInfo.res["res/proto/liqi.json"].prefix;
@@ -378,10 +372,6 @@ async function createMajsoulConnection(env) {
             }
             break;
         } catch (e) {
-            if (process.env.SERVER_LIST_URL) {
-                throw e;
-            }
-            // console.log(e);
             lastError = e;
             serverListUrl = null;
             preferredServer = "";
